@@ -1,0 +1,105 @@
+*  Date: 10/11/14
+*  SAS (version 9.3) program to process data for Matt Epler's BIG BATS project.
+*  Program written by Marc Gameroff.
+;
+
+options nofmterr nodate nonumber nomprint;
+libname bigbats 'C:\projects\bigbats';
+
+%macro convertFiles;
+/*  Cycle thru 218 CSV files and convert to SAS7BDAT format */
+%let filrf=mydir;
+%let rc=%sysfunc(filename(filrf,"C:\projects\bigbats\world_series")); 
+%let did=%sysfunc(dopen(&filrf)); 
+%let lstname=;
+%let memcount=%sysfunc(dnum(&did)); /* get # files in directory */
+%if &memcount > 0 %then /* check for blank directory */
+	%do i=1 %to &memcount; /* start loop for files */
+		%let lstname=%sysfunc(dread(&did,&i)); /* get file name to process */
+		filename bbfile "C:\projects\bigbats\world_series\&lstname"; /* assign file name */
+		/* pull year from file name */
+		%let year=substr("&lstname",12,4);
+		/* convert file from CSV to SAS7BDAT */
+		proc import datafile=bbfile dbms=csv out=bigbats.data&i
+			replace;
+			getnames=no;
+		run;
+		/* verify consistent formatting of raw data files */
+		data bigbats.newdata&i;
+		length year $4. playername $20.;
+		set bigbats.data&i;
+		error=0;
+		/* verify that first three rows have expected values in relevant columns */
+		if _n_=1 and coalescec(of _character_) ne '' then error=1; 
+		if _n_=2 and (upcase(var15) ne "PLAYOFF SERIES STATS" or upcase(var27) ne "REGULAR SEASON STATS") then error=1; 
+		if _n_=3 and (upcase(var15) ne "OPS" or upcase(var27) ne "OPS" or upcase(var3) ne "AB" or upcase(var20) ne "AB") then error=1; 
+		/* if raw file had expected layout, process it */
+		if error = 0 then do;
+			/* delete unneeded rows */
+			if coalescec(of _character_) eq ''  or upcase(var1) in ("TOTALS","NAME",'') then delete;
+			/* rename variables, convert character variables to numeric */
+			playername = var1;
+			pOPS = input(var15,6.3);
+			rOPS = input(var27,6.3);
+			pAB = input(var3,6.);
+			rAB = input(var20,6.);
+		end;
+		year=&year;
+		/* label new variables */
+		label pOPS='Playoff series OPS' rOPS='Regular season OPS'
+		      pAB='Playoff series AB'   rAB='Regular season AB';
+		/* delete unneeded columns */
+		drop var1-var27 error;
+		run;
+	%end;
+%let rc=%sysfunc(dclose(&did)); 
+%mend convertFiles;
+
+%convertFiles
+
+%macro filesToJoin;
+%do j=1 %to 218; bigbats.newdata&j %end;;
+%mend filesToJoin;
+
+/* Calculate difference between pOPS and rOPS for players meeting criteria */
+data bigbats.master;
+set %filesToJoin;
+opsdiff=.;
+direction="";
+if (pOPS >= 0 & rOPS >= 0)    /* make sure pOPS and rOPS are nonmissing, positive */
+	& (rAB > 100 & pAB > 15)  /* make sure rAB > 100 and pAB > 15 */
+	then do;
+		opsdiff = ABS(pOPS-rOPS);
+		if pOPS-rOPS > 0 then direction="+";
+		else if pOPS-rOPS < 0 then direction="-";
+		else if pOPS-rOPS = 0 then direction="x";
+	end;
+run;
+proc sort data=bigbats.master;
+by descending opsdiff;
+run;
+
+/* Export master file to CSV format */
+PROC EXPORT DATA=bigbats.master
+            OUTFILE= "C:\projects\bigbats\master.csv" 
+            DBMS=CSV REPLACE;
+RUN;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
